@@ -1,8 +1,13 @@
 #include "console.h"
 #include "defs.h"
 #include "loader.h"
-#include "timer.h"
 #include "trap.h"
+#include "timer.h"
+
+// int threadid()
+// {
+// 	return 0;
+// }
 
 void clean_bss()
 {
