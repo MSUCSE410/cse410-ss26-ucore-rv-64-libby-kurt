@@ -2,6 +2,7 @@
 #include "defs.h"
 #include "loader.h"
 #include "trap.h"
+#include "timer.h"
 #include "vm.h"
 
 struct proc pool[NPROC];
@@ -29,10 +30,17 @@ void proc_init(void)
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = UNUSED;
 		p->kstack = (uint64)kstack[p - pool];
+		//p->ustack = (uint64)ustack[p - pool];
 		p->trapframe = (struct trapframe *)trapframe[p - pool];
 		/*
 		* LAB1: you may need to initialize your new fields of proc here
 		*/
+
+		p->info.status = UnInit;
+        p->info.startTime = 0;
+
+		//Make sure that the syscall_times array is all set to 0
+		memset(p->info.syscall_times, 0, sizeof(p->info.syscall_times));
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = 0;
@@ -69,6 +77,12 @@ found:
 	memset((void *)p->trapframe, 0, TRAP_PAGE_SIZE);
 	p->context.ra = (uint64)usertrapret;
 	p->context.sp = p->kstack + KSTACK_SIZE;
+
+	//Do the initialization needed for TaskInfo
+    p->info.status = Ready;
+    p->info.startTime = get_cycle();
+    //Reset the number of times syscall has been called
+    memset(p->info.syscall_times, 0, sizeof(p->info.syscall_times));
 	return p;
 }
 
@@ -86,6 +100,11 @@ void scheduler(void)
 				/*
 				* LAB1: you may need to init proc start time here
 				*/
+				p->info.status = Running;
+				// if(p->info.startTime == 0)
+				// {
+				// 	p->info.startTime = get_cycle();
+				// }
 				p->state = RUNNING;
 				current_proc = p;
 				swtch(&idle.context, &p->context);
@@ -113,6 +132,7 @@ void sched(void)
 void yield(void)
 {
 	current_proc->state = RUNNABLE;
+	current_proc->info.status = Ready;
 	sched();
 }
 
@@ -127,6 +147,8 @@ void exit(int code)
 {
 	struct proc *p = curr_proc();
 	infof("proc %d exit with %d", p->pid, code);
+	p->state = UNUSED;
+    p->info.status = Exited;
 	freeproc(p);
 	finished();
 	sched();
