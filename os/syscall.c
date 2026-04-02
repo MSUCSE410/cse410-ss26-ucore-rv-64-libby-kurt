@@ -59,6 +59,118 @@ uint64 sys_gettimeofday(uint64 val, int _tz)
 	return 0;
 }
 
+uint64 sys_mmap(void * start, uint64 len, int port, int flag, int fd)
+{
+    struct proc *p = curr_proc();
+    uint64 vaddr = (uint64)start;
+
+    //Error checking
+    //Check that the size is less than 1Gb
+    if(len > (1ULL << 30))
+    {
+        return -1;
+    }
+    //Make sure there are some permissions
+    if ((port & 0x7) == 0)
+    {
+        return -1;
+    }
+    //Make sure permissions are valid
+    if ((port & ~0x7) != 0)
+    {
+        return -1;
+    }
+    //Make sure virtual address starts at page boundary
+    if(vaddr % PGSIZE != 0)
+    {
+        return -1;
+    }
+
+    //round up the page size to be the nearest multiple of len
+    uint64 size = PGROUNDUP(len);
+
+    //Caclulate what the end of the vaddr will be
+    uint64 vaddr_end = vaddr + size;
+
+    //Go page by page and check if the page is already mapped
+    for (uint64 va = vaddr; va < vaddr_end; va += PAGE_SIZE) {
+        if (walkaddr(p->pagetable, va) != 0) {
+            return -1;
+        }
+    }
+
+    int perm = PTE_U;
+    if(port & 0x1)
+    {
+        //Add read permission
+        perm = perm | PTE_R;
+    }
+    if(port & 0x2)
+    {
+        //Add write permission
+        perm = perm | PTE_W;
+    }
+    if(port & 0x4)
+    {
+        //Add exectue permission
+        perm = perm | PTE_X;
+    }
+
+    //Loop through each page
+    for (uint64 a = vaddr; a < vaddr_end; a+= PGSIZE)
+    {
+        //Allocate a new physical page
+        void *pa = kalloc();
+        //Fail if out of memory
+        if (!pa)
+        {
+            return -1;
+        } 
+        //Clear any memory already in the page
+        memset(pa, 0, PGSIZE);
+
+        //Map the page and create a pagetable entry for the page
+        if(mappages(p->pagetable, a, PGSIZE, (uint64)pa, perm) < 0)
+        {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+uint64 sys_munmap(void * start, uint64 len)
+{
+    if (len == 0) {
+        return -1;
+    }
+    struct proc *p = curr_proc();
+    uint64 vaddr = (uint64)start;
+
+    //Make sure virtual address starts at page boundary
+    if(vaddr % PGSIZE != 0)
+    {
+        return -1;
+    }
+
+    //round up the page size to be the nearest multiple of len
+    uint64 size = PGROUNDUP(len);
+
+    //Go page by page and check if the page is already unmapped
+    for(uint64 a = vaddr; a < vaddr + size; a += PGSIZE)
+    {
+        if(walkaddr(p->pagetable, a) == 0)
+        {
+            return -1;
+        }
+    }
+
+    //Actually unmap the the page
+    uvmunmap(p->pagetable, vaddr, size / PGSIZE, 1);
+
+    return 0;
+}
+
+
 uint64 sys_getpid()
 {
 	return curr_proc()->pid;
@@ -95,12 +207,55 @@ uint64 sys_wait(int pid, uint64 va)
 uint64 sys_spawn(uint64 va)
 {
 	// TODO: your job is to complete the sys call
-	return -1;
+
+    struct proc *p = curr_proc();
+    char filename [128];
+
+    //copy and translate the virtual address to the filename
+    if(copyinstr(p->pagetable, filename, va, sizeof(filename)) < 0)
+    {
+        return -1;
+    }
+
+    //get the id of the filename
+    int id = get_id_by_name(filename);
+    if(id < 0)
+    {
+        return -1;
+    }
+
+    //create a new proc
+    struct proc *new_proc = allocproc();
+    if(new_proc == NULL){
+        return -1;
+    }
+
+    //Set the parent of the new proc
+    new_proc->parent = p;
+
+    //takes process with id and installs it to new_proc, copies program and data into it
+    if(loader(id, new_proc) < 0)
+    {
+        return -1;
+    }
+    add_task(new_proc);
+    return new_proc->pid;
+
 }
 
 uint64 sys_set_priority(long long prio){
     // TODO: your job is to complete the sys call
-    return -1;
+    if(prio < 2)
+    {
+        return -1;
+    }
+
+    struct proc *p = curr_proc();
+
+    //set the current processes priority and pass
+    p->priority = prio;
+    p->pass = BIG_STRIDE / prio;
+    return prio;
 }
 
 
@@ -130,6 +285,12 @@ void syscall()
 	case SYS_gettimeofday:
 		ret = sys_gettimeofday(args[0], args[1]);
 		break;
+    case SYS_mmap:
+        ret = sys_mmap((void *)args[0], (unsigned long long)args[1], (int)args[2], (int)args[3], (int)args[4]);
+        break;
+    case SYS_munmap:
+        ret = sys_munmap((void *)args[0], (unsigned long long)args[1]);
+        break;
 	case SYS_getpid:
 		ret = sys_getpid();
 		break;
@@ -148,6 +309,9 @@ void syscall()
 	case SYS_spawn:
 		ret = sys_spawn(args[0]);
 		break;
+    case SYS_setpriority:
+        ret = sys_set_priority(args[0]);
+        break;
 	default:
 		ret = -1;
 		errorf("unknown syscall %d", id);

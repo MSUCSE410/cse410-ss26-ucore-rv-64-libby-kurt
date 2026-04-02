@@ -7,6 +7,7 @@
 
 #define NPROC (512)
 #define FD_BUFFER_SIZE (16)
+#define BIG_STRIDE 65336ULL
 
 struct file;
 
@@ -45,6 +46,11 @@ struct proc {
 	struct proc *parent; // Parent process
 	uint64 exit_code;
 	struct file *files[FD_BUFFER_SIZE];
+
+	//Add variables
+	uint64 stride; //length the proc has already run so far
+	uint64 pass; //pass value for the proc
+	long long priority; //priority of the process
 };
 
 int cpuid();
